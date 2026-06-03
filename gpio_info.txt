@@ -1,0 +1,11 @@
+Czujnik:
+
+ECHO -> GP14
+TRIGGER -> GP12
+
+Potencjometr:
+output -> gp27
+
+Buzzer:
+
++ -> GP32
