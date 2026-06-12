@@ -1,59 +1,84 @@
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
-#include <ESP_Mail_Client.h>
+#include <WiFiClientSecure.h>
+#include <UniversalTelegramBot.h>
 
 TFT_eSPI tft = TFT_eSPI();
-//POT
-#define POT 27
 
-// HC-SR04
+#define POT 27
 #define TRIG 26
 #define ECHO 14
-
-// Buzzer
 #define BUZZER 32
-
-// LED (wbudowana LED ESP32)
 #define LED 2
 
-SMTPSession smtp;
+// WiFi
+const char* ssid = "example_ssid";
+const char* password = "ultra_safe_password";
 
-const char* ssid = "wifi_example_name";
-const char* password = "12345";
+// Telegram
+#define BOT_TOKEN "example_bot_token"
+#define CHAT_ID "example_chat_id"
 
-#define AUTHOR_EMAIL "mail@example.com"
-#define AUTHOR_PASSWORD "example"
+WiFiClientSecure client;
+UniversalTelegramBot bot(BOT_TOKEN, client);
 
-#define RECIPIENT_EMAIL "recipient@example.com"
+unsigned long lastTelegram = 0;
 
-unsigned long ostatniMail = 0;
+int counter = 0;
+bool detected = false;
 
-
-int licznik = 0;
-bool wykryto = false;
-
-const int prog = 100; // [cm]
-
-void setup() {
-
-  Serial.begin(115200);
-  
-WiFi.begin(ssid, password);
-
-Serial.print("Laczenie z WiFi");
-
-while (WiFi.status() != WL_CONNECTED)
+void sendTelegram(int distance, int counter)
 {
-  delay(500);
-  Serial.print(".");
+  String msg =
+      "🚨 Movement detect!\n\n"
+      "Distance: " + String(distance) + " cm\n" +
+      "Count: " + String(counter);
+
+  if (bot.sendMessage(CHAT_ID, msg, ""))
+  {
+    Serial.println("Telegram sent");
+  }
+  else
+  {
+    Serial.println("Error: Could not send a Telegram");
+  }
 }
 
-Serial.println();
-Serial.println("WiFi polaczone");
-Serial.println(WiFi.localIP());
+void setup()
+{
+  Serial.begin(115200);
 
+  // WiFi
+  WiFi.begin(ssid, password);
 
+  Serial.print("Connecting to WiFi");
+
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("WiFi connected");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+
+  client.setInsecure();
+
+  if (bot.sendMessage(CHAT_ID,
+                      "ESP32 ready.",
+                      ""))
+  {
+    Serial.println("Telegram OK");
+  }
+  else
+  {
+    Serial.println("Telegram FAIL");
+  }
+
+  // Piny
   pinMode(TRIG, OUTPUT);
   pinMode(ECHO, INPUT);
 
@@ -71,58 +96,19 @@ Serial.println(WiFi.localIP());
 
   tft.setTextColor(TFT_GREEN);
   tft.setCursor(30, 10);
-  tft.print("LICZNIK OSOB");
+  tft.print("COUTER");
 
   delay(1000);
 }
 
-void sendEmail(int odleglosc, int licznik)
+void loop()
 {
-  SMTP_Message message;
-
-  message.sender.name = "ESP32 Licznik";
-  message.sender.email = AUTHOR_EMAIL;
-
-  message.subject = "Wykryto osobe";
-
-  message.addRecipient("Karolina", RECIPIENT_EMAIL);
-
-  String tekst =
-    "Wykryto osobe.\n\n"
-    "Odleglosc: " + String(odleglosc) + " cm\n" +
-    "Licznik: " + String(licznik);
-
-  message.text.content = tekst.c_str();
-
-  Session_Config config;
-
-  config.server.host_name = "smtp.gmail.com";
-  config.server.port = 465;
-
-  config.login.email = AUTHOR_EMAIL;
-  config.login.password = AUTHOR_PASSWORD;
-
-  smtp.connect(&config);
-
-  if (MailClient.sendMail(&smtp, &message))
-  {
-    Serial.println("Email wyslany");
-  }
-  else
-  {
-    Serial.println("Blad wysylki");
-  }
-}
-void loop() {
-
-
-  // Potencjometr
   int potValue = analogRead(POT);
 
-  // 20-200 [cm]
-  int prog = map(potValue, 0, 4095, 20, 200);
+  // 20 - 200 [cm]
+  int threshold = map(potValue, 0, 4095, 20, 200);
 
-  // Pomiar odległości HC-SR04
+  // HC-SR04 measurement
   digitalWrite(TRIG, LOW);
   delayMicroseconds(2);
 
@@ -130,67 +116,70 @@ void loop() {
   delayMicroseconds(10);
   digitalWrite(TRIG, LOW);
 
-  long czas = pulseIn(ECHO, HIGH);
+  long time = pulseIn(ECHO, HIGH, 30000);
 
-  int odleglosc = czas * 0.034 / 2;
+  int distance = time * 0.034 / 2;
 
-  Serial.print("Odleglosc: ");
-  Serial.print(odleglosc);
-
-  Serial.print(" cm  Prog: ");
-  Serial.println(prog);
+  Serial.print("Distance: ");
+  Serial.print(distance);
+  Serial.print(" cm   Threshold: ");
+  Serial.println(threshold);
 
   // LED
-  if (odleglosc < prog) {
+  if (distance < threshold)
+  {
     digitalWrite(LED, HIGH);
-  } else {
+  }
+  else
+  {
     digitalWrite(LED, LOW);
   }
 
-if (odleglosc < prog && !wykryto) {
+  // Movement detection
+  if (distance < threshold && !detected)
+  {
+    counter++;
+    detected = true;
 
-  licznik++;
-  wykryto = true;
+    // Once per minute
+    if (millis() - lastTelegram > 60000)
+    {
+      sendTelegram(distance, counter);
+      lastTelegram = millis();
+    }
 
-  if (millis() - ostatniMail > 60) {
-    sendEmail(odleglosc, licznik);
-    ostatniMail = millis();
+    tone(BUZZER, 1500);
+    delay(200);
+    noTone(BUZZER);
   }
 
-  tone(BUZZER, 1500);
-  delay(200);
-  noTone(BUZZER);
-}
-  if (odleglosc > prog && wykryto) {
-    wykryto = false;
+  if (distance > threshold && detected)
+  {
+    detected = false;
   }
 
+  // TFT
   tft.fillScreen(TFT_WHITE);
 
   tft.setTextColor(TFT_BLACK);
+
   tft.setCursor(20, 20);
-  tft.print("ODLEGLOSC");
+  tft.print("DISTANCE");
 
-  tft.setTextColor(TFT_BLACK);
   tft.setCursor(20, 50);
-  tft.print(odleglosc);
+  tft.print(distance);
   tft.print(" cm");
 
-  tft.setTextColor(TFT_BLACK);
   tft.setCursor(20, 110);
-  tft.print("LICZNIK");
+  tft.print("COUNTER");
 
-  tft.setTextColor(TFT_BLACK);
   tft.setCursor(20, 140);
-  tft.print(licznik);
+  tft.print(counter);
 
-  tft.setTextColor(TFT_BLACK);
   tft.setCursor(20, 220);
-  tft.print("PROG: ");
-  tft.print(prog);
+  tft.print("THRESHOLD: ");
+  tft.print(threshold);
   tft.print(" cm");
-
 
   delay(100);
 }
-
