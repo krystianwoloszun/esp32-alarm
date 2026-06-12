@@ -78,7 +78,6 @@ void setup()
     Serial.println("Telegram FAIL");
   }
 
-  // Piny
   pinMode(TRIG, OUTPUT);
   pinMode(ECHO, INPUT);
 
